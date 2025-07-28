@@ -1,0 +1,236 @@
+version: '3.8'
+
+services:
+  # VPN container using Private Internet Access
+  vpn:
+    image: thrnz/docker-wireguard-pia
+    container_name: ocean-vpn
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # PIA Credentials (set these in Unraid template)
+      - USER=${PIA_USERNAME}
+      - PASS=${PIA_PASSWORD}
+      # VPN Location (switchable without reboot)
+      - LOC=${PIA_LOCATION:-us_east}
+      # Network settings
+      - LOCAL_NETWORK=172.20.0.0/16
+      - KEEPALIVE=25
+      - VPNDNS=true
+      # Health check URL
+      - HEALTH_CHECK_HOST=ipinfo.io
+    volumes:
+      - /mnt/user/appdata/ocean-scraper/vpn-config:/pia
+      - /mnt/user/appdata/ocean-scraper/logs/vpn:/var/log/openvpn
+    networks:
+      vpn-network:
+        ipv4_address: 172.20.0.2
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.default.disable_ipv6=1
+      - net.ipv6.conf.all.disable_ipv6=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "https://ipinfo.io/ip"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Main Ocean Scraper application
+  ocean-scraper:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ocean-scraper
+    restart: unless-stopped
+    depends_on:
+      vpn:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Use VPN container's network stack
+    network_mode: "service:vpn"
+    environment:
+      # Application settings
+      - NODE_ENV=production
+      - PORT=3000
+      - MCP_PORT=3001
+      
+      # Database connection
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ocean_password}
+      
+      # Redis connection  
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # VPN configuration
+      - VPN_ENABLED=true
+      - VPN_REQUIRED=true
+      - PIA_USERNAME=${PIA_USERNAME}
+      - PIA_PASSWORD=${PIA_PASSWORD}
+      - PIA_REGION=${PIA_LOCATION:-us_east}
+      
+      # API Keys
+      - API_KEYS=${API_KEYS:-dev-key-123}
+      
+      # Browser settings
+      - BROWSER_HEADLESS=true
+      - BROWSER_MAX_INSTANCES=3
+      
+      # Anti-bot settings
+      - CAPTCHA_SOLVER_API_KEY=${CAPTCHA_SOLVER_API_KEY}
+      - STEALTH_MODE=true
+    volumes:
+      # Persistent data
+      - /mnt/user/appdata/ocean-scraper/logs:/app/logs
+      - /mnt/user/appdata/ocean-scraper/screenshots:/app/screenshots
+      - /mnt/user/appdata/ocean-scraper/downloads:/app/downloads
+      - /mnt/user/appdata/ocean-scraper/config:/app/config
+      
+      # VPN status sharing
+      - /mnt/user/appdata/ocean-scraper/vpn-config:/app/vpn-status:ro
+    labels:
+      # Unraid labels for web UI
+      - "net.unraid.docker.managed=composeman"
+      - "net.unraid.docker.webui=http://[IP]:[PORT:3000]"
+      - "net.unraid.docker.icon=https://raw.githubusercontent.com/yourusername/ocean-scraper/main/assets/logo.png"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ocean-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ocean_password}
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      - /mnt/user/appdata/ocean-scraper/postgres:/var/lib/postgresql/data
+      - ../init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - /mnt/user/appdata/ocean-scraper/backups:/backups
+    networks:
+      - ocean-network
+    ports:
+      - "5432:5432"  # Exposed for backup/admin access
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocean_user -d ocean_scraper"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Redis for job queue and caching
+  redis:
+    image: redis:7-alpine
+    container_name: ocean-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_password} --maxmemory 1gb --maxmemory-policy allkeys-lru
+    volumes:
+      - /mnt/user/appdata/ocean-scraper/redis:/data
+    networks:
+      - ocean-network
+    ports:
+      - "6379:6379"  # Exposed for admin access
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD:-redis_password}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Commander for web-based Redis management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: ocean-redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=ocean-redis:redis:6379:0:${REDIS_PASSWORD:-redis_password}
+    ports:
+      - "8081:8081"
+    networks:
+      - ocean-network
+    depends_on:
+      - redis
+    profiles:
+      - tools  # Optional service
+
+  # VPN location controller service
+  vpn-controller:
+    image: alpine:latest
+    container_name: ocean-vpn-controller
+    restart: unless-stopped
+    command: |
+      sh -c "
+        apk add --no-cache curl jq &&
+        while true; do
+          # Check for location change requests
+          if [ -f /shared/change-location ]; then
+            NEW_LOCATION=\$$(cat /shared/change-location)
+            echo \"Changing VPN location to: \$$NEW_LOCATION\"
+            
+            # Update VPN container environment
+            docker exec ocean-vpn sh -c \"
+              export LOC=\$$NEW_LOCATION &&
+              killall openvpn &&
+              sleep 5 &&
+              /scripts/start-vpn.sh
+            \"
+            
+            # Remove change request file
+            rm /shared/change-location
+            
+            # Log the change
+            echo \"\$$(date): Changed VPN location to \$$NEW_LOCATION\" >> /shared/vpn-changes.log
+          fi
+          
+          sleep 10
+        done
+      "
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /mnt/user/appdata/ocean-scraper/vpn-config:/shared
+    networks:
+      - ocean-network
+
+volumes:
+  postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/user/appdata/ocean-scraper/postgres
+  redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/user/appdata/ocean-scraper/redis
+
+networks:
+  ocean-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+  vpn-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

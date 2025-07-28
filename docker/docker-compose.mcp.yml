@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database for MCP server
+  postgres:
+    image: postgres:15-alpine
+    container_name: ocean-mcp-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ocean_password}
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - ocean-mcp-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocean_user -d ocean_scraper"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Redis for job queue and caching
+  redis:
+    image: redis:7-alpine
+    container_name: ocean-mcp-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - ocean-mcp-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Ocean Scraper MCP Server
+  ocean-mcp-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.mcp
+    container_name: ocean-mcp-server
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    environment:
+      - NODE_ENV=production
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ocean_password}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - VPN_ENABLED=${VPN_ENABLED:-false}
+      - VPN_REQUIRED=${VPN_REQUIRED:-false}
+      - PIA_USERNAME=${PIA_USERNAME:-}
+      - PIA_PASSWORD=${PIA_PASSWORD:-}
+      - PIA_REGION=${PIA_REGION:-us-east}
+      - MAX_BROWSER_INSTANCES=${MAX_BROWSER_INSTANCES:-3}
+      - BROWSER_TIMEOUT=${BROWSER_TIMEOUT:-30000}
+      - BROWSER_HEADLESS=${BROWSER_HEADLESS:-true}
+      - MAX_CRAWL_DEPTH=${MAX_CRAWL_DEPTH:-3}
+      - MAX_PAGES_PER_CRAWL=${MAX_PAGES_PER_CRAWL:-100}
+      - REQUEST_DELAY_MS=${REQUEST_DELAY_MS:-1000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ANTI_BOT_ENABLED=${ANTI_BOT_ENABLED:-true}
+      - STEALTH_MODE=${STEALTH_MODE:-true}
+    volumes:
+      - ocean_logs:/app/logs
+      - ocean_screenshots:/app/screenshots
+      - ocean_downloads:/app/downloads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - ocean-mcp-network
+    # MCP servers run via stdio, no port mapping needed
+    # For VPN support, add these if VPN_ENABLED=true:
+    # cap_add:
+    #   - NET_ADMIN
+    # devices:
+    #   - /dev/net/tun
+    # sysctls:
+    #   - net.ipv4.conf.all.rp_filter=2
+
+  # Optional: Redis Commander for debugging (development only)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: ocean-mcp-redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    networks:
+      - ocean-mcp-network
+    depends_on:
+      - redis
+    profiles:
+      - debug
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  ocean_logs:
+    driver: local
+  ocean_screenshots:
+    driver: local
+  ocean_downloads:
+    driver: local
+
+networks:
+  ocean-mcp-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/16

@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(chmod:*)",
+      "Bash(npm install:*)",
+      "Bash(docker-compose:*)",
+      "Bash(cp:*)",
+      "Bash(npm run dev:*)",
+      "Bash(docker exec:*)",
+      "Bash(curl:*)",
+      "Bash(pkill:*)",
+      "Bash(npx playwright:*)",
+      "Bash(find:*)",
+      "Bash(node:*)",
+      "Bash(ls:*)",
+      "Bash(mv:*)",
+      "Bash(tree:*)",
+      "Bash(npm run build:*)",
+      "Bash(true)",
+      "Bash(VPN_ENABLED=false VPN_REQUIRED=true npx tsx src/index.ts)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "Bash(colima start:*)",
+      "Bash(npm run mcp:server:*)",
+      "Bash(touch:*)",
+      "Bash(rm:*)"
+    ],
+    "deny": []
+  }
+}

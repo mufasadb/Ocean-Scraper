@@ -1,0 +1,115 @@
+version: '3.8'
+
+services:
+  # Main Ocean Scraper application
+  ocean-scraper:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ocean-scraper
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=ocean_password
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - VPN_ENABLED=${VPN_ENABLED:-false}
+      - VPN_REQUIRED=${VPN_REQUIRED:-false}
+      - PIA_USERNAME=${PIA_USERNAME}
+      - PIA_PASSWORD=${PIA_PASSWORD}
+      - PIA_REGION=${PIA_REGION:-us-east}
+    volumes:
+      - ./vpn:/app/vpn:ro
+      - ocean_logs:/app/logs
+      - ocean_screenshots:/app/screenshots
+      - ocean_downloads:/app/downloads
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - ocean-network
+    cap_add:
+      - NET_ADMIN  # Required for VPN
+    devices:
+      - /dev/net/tun  # Required for VPN
+    sysctls:
+      - net.ipv4.conf.all.rp_filter=2
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ocean-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=ocean_password
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - ocean-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocean_user -d ocean_scraper"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Redis for job queue and caching
+  redis:
+    image: redis:7-alpine
+    container_name: ocean-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - ocean-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Redis Commander (optional - for Redis management UI)
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: ocean-redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - "8081:8081"
+    networks:
+      - ocean-network
+    depends_on:
+      - redis
+    profiles:
+      - debug
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  ocean_logs:
+    driver: local
+  ocean_screenshots:
+    driver: local
+  ocean_downloads:
+    driver: local
+
+networks:
+  ocean-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
