@@ -484,7 +484,7 @@ server.registerTool(
       
       // Additional health checks
       const dbHealthy = await database.healthCheck();
-      const redisHealthy = redis.isConnected();
+      const redisHealthy = redis.getClient().isOpen;
       const queueStats = await jobManager.getQueueStats();
       
       console.log(`[${new Date().toISOString()}] OCEAN_SCRAPER | HEALTH_CHECK | status=${health.status} | db=${dbHealthy} | redis=${redisHealthy}`);

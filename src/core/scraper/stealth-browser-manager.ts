@@ -37,7 +37,7 @@ interface BrowserFingerprint {
   };
 }
 
-interface StealthOptions {
+export interface StealthOptions {
   enableFingerprinting: boolean;
   rotateContexts: boolean;
   randomizeTimings: boolean;

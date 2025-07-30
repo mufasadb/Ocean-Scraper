@@ -128,7 +128,7 @@ export class ContentExtractor {
     }
   }
 
-  private async extractTitle(page: Page, $: cheerio.CheerioAPI): Promise<string> {
+  private async extractTitle(page: Page, $: any): Promise<string> {
     let title = $('title').text().trim();
     
     if (!title) {
@@ -150,7 +150,7 @@ export class ContentExtractor {
     return title || 'Untitled';
   }
 
-  private async extractMetadata(page: Page, $: cheerio.CheerioAPI) {
+  private async extractMetadata(page: Page, $: any) {
     const metadata: ExtractedContent['metadata'] = {};
 
     metadata.description = $('meta[name="description"]').attr('content') ||
@@ -180,7 +180,7 @@ export class ContentExtractor {
     return metadata;
   }
 
-  private extractLinks($: cheerio.CheerioAPI, baseUrl: string) {
+  private extractLinks($: any, baseUrl: string) {
     const links: ExtractedContent['links'] = [];
     const baseDomain = new URL(baseUrl).hostname;
 
@@ -207,7 +207,7 @@ export class ContentExtractor {
     return links.slice(0, 100);
   }
 
-  private extractImages($: cheerio.CheerioAPI) {
+  private extractImages($: any) {
     const images: ExtractedContent['images'] = [];
 
     $('img[src]').each((_, element) => {

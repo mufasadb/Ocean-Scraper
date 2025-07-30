@@ -227,10 +227,13 @@ export class ScrapingServiceFactory {
       requireVpn: options.requireVpn
     };
 
-    const result = await this.regularService.scrapePage(url, legacyOptions);
+    const formats = options.formats || ['markdown'];
+    const result = await this.regularService.scrapePage(url, formats, legacyOptions);
 
     return {
       ...result,
+      links: result.links?.map((link: any) => typeof link === 'string' ? link : link.href) || [],
+      images: result.images?.map((img: any) => typeof img === 'string' ? img : img.src) || [],
       antiBotMode: false
     };
   }
@@ -291,14 +294,11 @@ export class ScrapingServiceFactory {
     logger.info('Cleaning up scraping services');
 
     // Cleanup enhanced service if available
-    if (this.enhancedService) {
+    if (this.enhancedService && typeof this.enhancedService.cleanup === 'function') {
       await this.enhancedService.cleanup();
     }
 
-    // Cleanup regular service if it has cleanup method
-    if (typeof this.regularService.cleanup === 'function') {
-      await this.regularService.cleanup();
-    }
+    // Regular service doesn't have cleanup method
   }
 
   // Method to dynamically enable/disable anti-bot features

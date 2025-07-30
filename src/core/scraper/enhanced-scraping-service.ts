@@ -131,9 +131,12 @@ export class EnhancedScrapingService {
 
         // Extract content using existing content extractor
         const extractionResult = await this.contentExtractor.extractContent(page, {
-          formats: options.formats,
+          includeContent: true,
           includeMetadata: options.includeMetadata || false,
-          excludeTags: options.excludeTags || []
+          includeLinks: true,
+          includeImages: true,
+          excludeTags: options.excludeTags || [],
+          structuredData: true
         });
 
         const responseTime = Date.now() - startTime;
@@ -152,11 +155,11 @@ export class EnhancedScrapingService {
         });
 
         return {
-          title: extractionResult.title,
+          title: extractionResult.title || '',
           content: extractionResult.content,
           metadata: extractionResult.metadata,
-          links: extractionResult.links,
-          images: extractionResult.images,
+          links: extractionResult.links?.map(link => link.href) || [],
+          images: extractionResult.images?.map(img => img.src) || [],
           timestamp: new Date(),
           responseTime,
           stealthMetrics

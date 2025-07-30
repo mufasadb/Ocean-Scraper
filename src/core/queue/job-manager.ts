@@ -367,7 +367,7 @@ export class JobManager {
         logger.debug('Job waiting', { queueName, jobId: job.id });
       });
 
-      queue.on('active', (job: any) => {
+      queue.on('active' as any, (job: any) => {
         logger.debug('Job active', { queueName, jobId: job.id });
       });
 
