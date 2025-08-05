@@ -46,7 +46,7 @@ if [ "$VPN_ENABLED" = "true" ]; then
     
     # Run VPN setup script (this needs root privileges)
     cd /app
-    ./vpn/pia-config.sh start
+    bash ./vpn/pia-config.sh start
     
     # Wait a moment for VPN to establish
     sleep 5

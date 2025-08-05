@@ -57,10 +57,17 @@ mkdir -p /etc/openvpn
 # Download PIA OpenVPN configuration
 log "Downloading PIA OpenVPN configuration..."
 curl -s "https://www.privateinternetaccess.com/openvpn/openvpn.zip" -o /tmp/pia-ovpn.zip
-unzip -q /tmp/pia-ovpn.zip -d /tmp/pia-ovpn/
+unzip -o -q /tmp/pia-ovpn.zip -d /tmp/pia-ovpn/
 
 # Find the configuration file for the selected region
-OVPN_FILE=$(find /tmp/pia-ovpn -name "*${PIA_REGION}*.ovpn" | head -1)
+# List available files for debugging
+log "Available OpenVPN files:"
+find /tmp/pia-ovpn -name "*.ovpn" | head -10 | while read file; do
+    log "  $(basename "$file")"
+done
+
+# Try different naming patterns for us-west
+OVPN_FILE=$(find /tmp/pia-ovpn -name "*us_west*.ovpn" -o -name "*us-west*.ovpn" -o -name "*uswest*.ovpn" -o -name "*california*.ovpn" -o -name "*losangeles*.ovpn" | head -1)
 if [ -z "$OVPN_FILE" ]; then
     log "ERROR: Could not find OpenVPN configuration for region: $PIA_REGION"
     exit 1
