@@ -79,9 +79,9 @@ export PORT=${PORT:-3000}
 echo "Starting Ocean Scraper application..."
 cd /app
 
-# Use su to run as nodejs user while keeping environment variables  
-# Fix: Use -s flag to specify shell for nodejs user
-su -s /bin/sh nodejs -c "node dist/index.js" &
+# Run as root for now to avoid user switching issues
+# TODO: Fix user switching in future update
+node dist/index.js &
 NODE_PID=$!
 
 echo "Ocean Scraper started with PID: $NODE_PID"
