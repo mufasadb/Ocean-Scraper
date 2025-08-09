@@ -11,6 +11,9 @@ services:
       - SYS_MODULE
     devices:
       - /dev/net/tun:/dev/net/tun
+    ports:
+      - "3000:3000"  # Ocean-Scraper API
+      - "3001:3001"  # Ocean-Scraper MCP server
     environment:
       # PIA Credentials (set these in Unraid template)
       - USER=${PIA_USERNAME}
