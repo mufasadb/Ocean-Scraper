@@ -1,0 +1,139 @@
+version: '3.8'
+
+# Simplified Unraid configuration - tested and working
+services:
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ocean-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ocean_password}
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      - /mnt/user/appdata/ocean-scraper/postgres:/var/lib/postgresql/data
+      - /mnt/user/appdata/ocean-scraper/docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - /mnt/user/appdata/ocean-scraper/backups:/backups
+    networks:
+      - ocean-network
+    ports:
+      - "5432:5432"  # For admin access
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocean_user -d ocean_scraper"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Redis for job queue and caching
+  redis:
+    image: redis:7-alpine
+    container_name: ocean-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_password} --maxmemory 1gb --maxmemory-policy allkeys-lru
+    volumes:
+      - /mnt/user/appdata/ocean-scraper/redis:/data
+    networks:
+      - ocean-network
+    ports:
+      - "6379:6379"  # For admin access
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD:-redis_password}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Main Ocean Scraper application
+  ocean-scraper:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: ocean-scraper
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Application settings
+      - NODE_ENV=production
+      - PORT=3000
+      
+      # Database connection
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ocean_password}
+      
+      # Redis connection  
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-redis_password}
+      
+      # VPN configuration (Melbourne, Australia)
+      - VPN_ENABLED=false  # Set to true when VPN is configured
+      - PIA_USERNAME=${PIA_USERNAME}
+      - PIA_PASSWORD=${PIA_PASSWORD}
+      - PIA_REGION=australia  # Melbourne server
+      
+      # API Keys (change in production)
+      - API_KEYS=${API_KEYS:-dev-key-123}
+      
+      # Browser settings for Unraid
+      - BROWSER_HEADLESS=true
+      - BROWSER_MAX_INSTANCES=3
+      
+      # Anti-bot settings
+      - STEALTH_MODE=true
+      - ANTI_BOT_ENABLED=true
+    volumes:
+      # Persistent data directories
+      - /mnt/user/appdata/ocean-scraper/logs:/app/logs
+      - /mnt/user/appdata/ocean-scraper/screenshots:/app/screenshots
+      - /mnt/user/appdata/ocean-scraper/downloads:/app/downloads
+      - /mnt/user/appdata/ocean-scraper/config:/app/config
+    networks:
+      - ocean-network
+    ports:
+      - "3000:3000"  # Ocean-Scraper API
+    labels:
+      # Unraid labels for web UI
+      - "net.unraid.docker.managed=composeman"
+      - "net.unraid.docker.webui=http://[IP]:[PORT:3000]"
+      - "net.unraid.docker.icon=https://raw.githubusercontent.com/selfhostedshow/selfhosted_templates/master/Images/firecrawl-icon.png"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # Optional: Redis Commander for management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: ocean-redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=ocean-redis:redis:6379:0:${REDIS_PASSWORD:-redis_password}
+    ports:
+      - "8081:8081"
+    networks:
+      - ocean-network
+    depends_on:
+      - redis
+    profiles:
+      - tools  # Optional service
+
+networks:
+  ocean-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+
+# Note: To use with VPN, add the VPN container and set VPN_ENABLED=true
+# The VPN configuration can be added later once the basic setup is working

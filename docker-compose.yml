@@ -1,0 +1,190 @@
+version: '3.8'
+
+services:
+  # VPN container using Private Internet Access
+  vpn:
+    image: thrnz/docker-wireguard-pia
+    container_name: ocean-vpn
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "3000:3000"  # Ocean-Scraper API
+      - "3001:3001"  # Ocean-Scraper MCP server
+    environment:
+      # PIA Credentials (set these in Unraid template)
+      - USER=${PIA_USERNAME}
+      - PASS=${PIA_PASSWORD}
+      # VPN Location - WORKING: aus_melbourne, aus, aus_perth  
+      - LOC=${PIA_LOCATION:-aus_melbourne}
+      # Network settings
+      - LOCAL_NETWORK=172.20.0.0/16
+      - KEEPALIVE=25
+      - VPNDNS=true
+      # Health check URL
+      - HEALTH_CHECK_HOST=ipinfo.io
+    volumes:
+      - ./logs/vpn:/var/log/openvpn
+    networks:
+      vpn-network:
+        ipv4_address: 172.20.0.2
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.default.disable_ipv6=1
+      - net.ipv6.conf.all.disable_ipv6=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "https://ipinfo.io/ip"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Main Ocean Scraper application
+  ocean-scraper:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: ocean-scraper
+    restart: unless-stopped
+    depends_on:
+      vpn:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Use VPN container's network stack
+    network_mode: "service:vpn"
+    environment:
+      # Application settings
+      - NODE_ENV=production
+      - PORT=3000
+      - MCP_PORT=3001
+      
+      # Database connection
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ocean_password}
+      
+      # Redis connection  
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      
+      # VPN configuration (disabled - using container VPN)
+      - VPN_ENABLED=false
+      - VPN_REQUIRED=false
+      - PIA_USERNAME=${PIA_USERNAME}
+      - PIA_PASSWORD=${PIA_PASSWORD}
+      - PIA_REGION=${PIA_LOCATION:-aus_melbourne}
+      
+      # API Keys
+      - API_KEYS=${API_KEYS:-dev-key-123}
+      
+      # Browser settings
+      - BROWSER_HEADLESS=true
+      - BROWSER_MAX_INSTANCES=3
+      
+      # Anti-bot settings
+      - CAPTCHA_SOLVER_API_KEY=${CAPTCHA_SOLVER_API_KEY}
+      - STEALTH_MODE=true
+    volumes:
+      # Persistent data
+      - ./logs:/app/logs
+      - ./screenshots:/app/screenshots
+      - ./downloads:/app/downloads
+      - ./config:/app/config
+    labels:
+      # Unraid labels for web UI
+      - "net.unraid.docker.managed=composeman"
+      - "net.unraid.docker.webui=http://[IP]:[PORT:3000]"
+      - "net.unraid.docker.icon=https://raw.githubusercontent.com/yourusername/ocean-scraper/main/assets/logo.png"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ocean-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ocean_password}
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+      - ./backups:/backups
+    networks:
+      - ocean-network
+    ports:
+      - "5432:5432"  # Exposed for backup/admin access
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocean_user -d ocean_scraper"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Redis for job queue and caching
+  redis:
+    image: redis:7-alpine
+    container_name: ocean-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_password} --maxmemory 1gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - ocean-network
+    ports:
+      - "6379:6379"  # Exposed for admin access
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD:-redis_password}", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis Commander for web-based Redis management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: ocean-redis-commander
+    restart: unless-stopped
+    environment:
+      - REDIS_HOSTS=ocean-redis:redis:6379:0:${REDIS_PASSWORD:-redis_password}
+    ports:
+      - "8081:8081"
+    networks:
+      - ocean-network
+    depends_on:
+      - redis
+    profiles:
+      - tools  # Optional service
+
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  ocean-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+  vpn-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

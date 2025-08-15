@@ -1,0 +1,156 @@
+version: '3.8'
+
+# Test VPN stack with correct Melbourne location
+services:
+  # VPN container using Private Internet Access
+  vpn:
+    image: thrnz/docker-wireguard-pia
+    container_name: ocean-vpn-test
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "3000:3000"  # Ocean-Scraper API
+    environment:
+      # PIA Credentials from .env
+      - USER=${PIA_USERNAME}
+      - PASS=${PIA_PASSWORD}
+      # VPN Location - WORKING: aus_melbourne
+      - LOC=aus_melbourne
+      # Network settings
+      - LOCAL_NETWORK=172.20.0.0/16
+      - KEEPALIVE=25
+      - VPNDNS=true
+      # Health check URL
+      - HEALTH_CHECK_HOST=ipinfo.io
+    volumes:
+      - ./logs/vpn:/var/log/openvpn
+    networks:
+      vpn-network:
+        ipv4_address: 172.20.0.2
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+      - net.ipv6.conf.default.disable_ipv6=1
+      - net.ipv6.conf.all.disable_ipv6=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "https://ipinfo.io/ip"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # PostgreSQL database
+  postgres:
+    image: postgres:15-alpine
+    container_name: ocean-postgres-test
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=ocean_password
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - ocean-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ocean_user -d ocean_scraper"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # Redis for job queue and caching
+  redis:
+    image: redis:7-alpine
+    container_name: ocean-redis-test
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_test_data:/data
+    networks:
+      - ocean-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Main Ocean Scraper application
+  ocean-scraper:
+    image: ocean-scraper:latest
+    container_name: ocean-scraper-test
+    restart: unless-stopped
+    depends_on:
+      vpn:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Use VPN container's network stack
+    network_mode: "service:vpn"
+    environment:
+      # Application settings
+      - NODE_ENV=production
+      - PORT=3000
+      
+      # Database connection
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=ocean_scraper
+      - POSTGRES_USER=ocean_user
+      - POSTGRES_PASSWORD=ocean_password
+      
+      # Redis connection  
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      
+      # VPN configuration (disabled - using container VPN)
+      - VPN_ENABLED=false
+      - VPN_REQUIRED=false
+      - PIA_USERNAME=${PIA_USERNAME}
+      - PIA_PASSWORD=${PIA_PASSWORD}
+      - PIA_REGION=aus_melbourne
+      
+      # API Keys
+      - API_KEYS=dev-key-123
+      
+      # Browser settings
+      - BROWSER_HEADLESS=true
+      - BROWSER_MAX_INSTANCES=2
+      
+      # Anti-bot settings
+      - STEALTH_MODE=true
+    volumes:
+      # Logs and generated content
+      - ./logs:/app/logs
+      - ./screenshots:/app/screenshots
+      - ./downloads:/app/downloads
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+volumes:
+  postgres_test_data:
+    driver: local
+  redis_test_data:
+    driver: local
+
+networks:
+  ocean-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
+  vpn-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
