@@ -21,7 +21,6 @@ FROM node:18-alpine AS production
 
 # Install system dependencies for Playwright and VPN
 RUN apk add --no-cache \
-    chromium \
     nss \
     freetype \
     freetype-dev \
@@ -31,11 +30,8 @@ RUN apk add --no-cache \
     openvpn \
     iptables \
     curl \
-    bash
-
-# Tell Playwright to use installed Chromium
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium-browser
+    bash \
+    xvfb
 
 # Create app user with shell
 RUN addgroup -g 1001 -S nodejs && \
@@ -47,6 +43,10 @@ WORKDIR /app
 COPY --from=builder --chown=nodejs:nodejs /app/dist ./dist
 COPY --from=builder --chown=nodejs:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=nodejs:nodejs /app/package*.json ./
+
+# Install Playwright browsers
+RUN npx playwright install chromium
+RUN npx playwright install-deps
 
 # Copy VPN configuration and make executable
 COPY docker/vpn ./vpn
